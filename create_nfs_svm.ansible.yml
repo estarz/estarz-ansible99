@@ -1,0 +1,132 @@
+---
+- hosts: localhost
+  name: Create NFS SVM
+  gather_facts: false
+  collections:
+  - netapp.ontap
+  module_defaults:
+    group/netapp.ontap.netapp_ontap:
+      hostname: "10.128.16.36"
+      username: "admin"
+      password: "netapp13!"
+      https: true
+      validate_certs: false
+
+  tasks:
+  - name: Create SVM
+    na_ontap_svm:
+      state: present
+      name: nfs-test
+      allowed_protocols: nfs
+      root_volume: nfs_test_root
+      root_volume_aggregate: Infra_OTS_02_SSD_1
+      root_volume_security_style: unix
+
+  - name: Configure SVM
+    na_ontap_svm:
+      state: present
+      name: nfs-test
+      services:
+        nfs:
+          enabled: true
+
+  - name: Create export policy
+    netapp.ontap.na_ontap_export_policy:
+      state: present
+      name: nfs_export_policy1
+      vserver: nfs-test
+
+  - name: Create ExportPolicyRule
+    netapp.ontap.na_ontap_export_policy_rule:
+      state: present
+      name: default
+      rule_index: 1
+      vserver: nfs-test
+      client_match: 10.128.16.0/22
+      ro_rule: sys
+      rw_rule: never
+      protocol: nfs
+      super_user_security: sys
+      anonymous_user_id: 65534
+      allow_suid: true
+
+  - name: Create ExportPolicyRule
+    netapp.ontap.na_ontap_export_policy_rule:
+      state: present
+      name: nfs_export_policy1
+      rule_index: 1
+      vserver: nfs-test
+      client_match: 10.128.16.0/22
+      ro_rule: sys
+      rw_rule: sys
+      protocol: nfs
+      super_user_security: sys
+      anonymous_user_id: 65534
+      allow_suid: true
+
+  - name: Modify NFS options
+    netapp.ontap.na_ontap_nfs:
+      state: present
+      vserver: nfs-test
+      nfsv3: enabled
+      nfsv4: disabled
+      nfsv41: disabled
+      vstorage_state: enabled
+
+
+  - name: Create Adaptive QOS Policy Group
+    netapp.ontap.na_ontap_qos_policy_group:
+      state: present
+      name: KS-STaaSv1-Prem
+      vserver: nfs-test
+      adaptive_qos_options:
+        block_size: 32k
+        absolute_min_iops: 500
+        expected_iops: 2048
+        expected_iops_allocation: allocated_space
+        peak_iops: 4096
+        peak_iops_allocation: used_space
+
+  - name: Create FlexVol
+    netapp.ontap.na_ontap_volume:
+      state: present
+      name: datastore00
+      junction_path: /datastore00
+      aggregate_name: Infra_OTS_02_SSD_1
+      size: 100
+      size_unit: gb
+      space_guarantee: none
+      export_policy: nfs_export_policy1
+      vserver: nfs-test
+      qos_adaptive_policy_group: KS-STaaSv1-Prem
+      wait_for_completion: True
+      comment: ansible created volume
+
+  - name: Enable Volume efficiency
+    netapp.ontap.na_ontap_volume_efficiency:
+      state: present
+      vserver: "nfs-test"
+      volume_name: "datastore00"
+      #policy: auto <--- ONLY ON AFF
+      policy: default
+
+  - name: Create data interface - REST - NAS
+    netapp.ontap.na_ontap_interface:
+      state: present
+      interface_name: data2
+      home_port: e0a
+      home_node: Infra-OTS-02
+      admin_status: up
+      service_policy: default-data-files
+      is_auto_revert: true
+      interface_type: ip
+      address: 10.128.16.204
+      netmask: 255.255.255.0
+      vserver: nfs-test
+
+  - name: Create Default Route
+    netapp.ontap.na_ontap_net_routes:
+      state: present
+      vserver: nfs-test
+      destination: 0.0.0.0/0
+      gateway: 10.128.16.1
